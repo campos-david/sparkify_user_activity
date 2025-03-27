@@ -12,20 +12,30 @@ import json
 import csv
 
 # Configure the right path and create the csv file that will be used to query the necessary tables
+# We will use looping functions to list the files and collect each one of them
 
 print(os.getcwd())
 filepath = os.getcwd() + '/event_data'
+
 for root, dirs, files in os.walk(filepath):
-  file_path_list = glob.glob(os.path.join(root,'*'))
+    file_path_list = glob.glob(os.path.join(root,'*'))
+
 print(filepath)
 
+# Configuring the file writing and set the data that will be used to fulfill the Cassandra tables
+
 full_data_rows_list = [] 
+    
 for f in file_path_list:
-   with open(f, 'r', encoding = 'utf8', newline='') as csvfile:
-    csvreader = csv.reader(csvfile) 
-    next(csvreader)
-    for line in csvreader:
-      full_data_rows_list.append(line)
+
+    with open(f, 'r', encoding = 'utf8', newline='') as csvfile: 
+        # creating a csv reader object 
+        csvreader = csv.reader(csvfile) 
+        next(csvreader)
+               
+        for line in csvreader:
+            #print(line)
+            full_data_rows_list.append(line) 
 
 csv.register_dialect('myDialect', quoting=csv.QUOTE_ALL, skipinitialspace=True)
 
@@ -38,7 +48,8 @@ with open('event_datafile_new.csv', 'w', encoding = 'utf8', newline='') as f:
             continue
         writer.writerow((row[0], row[2], row[3], row[4], row[5], row[6], row[7], row[8], row[12], row[13], row[16]))
 
-# check the number of rows in the csv file
+# Just a simple QC to check if the rows are correctly created
+
 with open('event_datafile_new.csv', 'r', encoding = 'utf8') as f:
     print(sum(1 for line in f))
 
@@ -46,19 +57,22 @@ with open('event_datafile_new.csv', 'r', encoding = 'utf8') as f:
 
 from cassandra.cluster import Cluster
 cluster = Cluster()
+
 session = cluster.connect()
+
 session.execute("""
     CREATE KEYSPACE IF NOT EXISTS sparkify 
     WITH REPLICATION = 
     { 'class' : 'SimpleStrategy', 'replication_factor' : 1 }"""
                )
+
 session.set_keyspace('sparkify')
 
 # Tables created and schema defined, time to answer some business questions
 
 # Question1: Give me the artist, song title and song's length in the music app history that was heard during sessionId = 338, and itemInSession = 4
 
-query1table = """CREATE TABLE IF NOT EXISTS query1table
+query1table = """CREATE TABLE IF NOT EXISTS artist_library
     (artist_name text,
     item_in_session int,
     length float,
@@ -66,23 +80,25 @@ query1table = """CREATE TABLE IF NOT EXISTS query1table
     song_title text,
     PRIMARY KEY (session_id, item_in_session)
 )"""
+
 session.execute(query1table)
+
 file = 'event_datafile_new.csv'
 
 with open(file, encoding = 'utf8') as f:
     csvreader = csv.reader(f)
     next(csvreader) # skip header
     for line in csvreader:
-        query = "INSERT INTO query1table (artist_name, item_in_session, length, session_id, song_title)"
+        query = "INSERT INTO artist_library (artist_name, item_in_session, length, session_id, song_title)"
         query = query + "VALUES (%s, %s, %s, %s, %s)"
         session.execute(query, (line[0], int(line[3]), float(line[5]), int(line[8]), line[9]))
-
-query = """SELECT * FROM query1table WHERE SESSION_ID = 338 AND ITEM_IN_SESSION = 4"""
+        
+query = """SELECT * FROM artist_library WHERE SESSION_ID = 338 AND ITEM_IN_SESSION = 4"""
 result_set = session.execute(query)
 for row in result_set:
     print(row)
 
-# Results were: Row(session_id=338, item_in_session=4, artist_name='Faithless', length=495.30731201171875, song_title='Music Matters (Mark Knight Dub)')
+    # Results were: Row(session_id=338, item_in_session=4, artist_name='Faithless', length=495.30731201171875, song_title='Music Matters (Mark Knight Dub)')
 
 # now, the question2: Give me only the following: name of artist, song (sorted by itemInSession) and user (first and last name) for userid = 10, sessionid = 182
 
@@ -93,7 +109,7 @@ with open(file, encoding = 'utf8') as f:
     next(csvreader) # skip header
     for line in csvreader:
        query2table = """
-CREATE TABLE IF NOT EXISTS query2table (
+CREATE TABLE IF NOT EXISTS user_historic (
     user_id int,
     session_id int,
     item_in_session int,
@@ -112,27 +128,28 @@ with open(file, encoding='utf8') as f:
     next(csvreader)  # Skip header
     
     query2 = """
-    INSERT INTO query2table (user_id, session_id, item_in_session, artist_name, song_title, FirstName, LastName)
+    INSERT INTO user_historic (user_id, session_id, item_in_session, artist_name, song_title, FirstName, LastName)
     VALUES (%s, %s, %s, %s, %s, %s, %s)
     """
     
     for line in csvreader:
         session.execute(query2, (int(line[10]), int(line[8]), int(line[3]), line[0], line[9], line[1], line[4]))
+
 query2 = """
 SELECT artist_name, song_title, FirstName, LastName 
-FROM query2table 
+FROM user_historic 
 WHERE user_id = 10 AND session_id = 182;
 """
 result_set2 = session.execute(query2)
 for row in result_set2:
     print(row)
-
+    
 # Results were: Row(artist_name='Down To The Bone', song_title="Keep On Keepin' On", firstname='Sylvie', lastname='Cruz')
 # Row(artist_name='Three Drives', song_title='Greece 2000', firstname='Sylvie', lastname='Cruz')
 # Row(artist_name='Sebastien Tellier', song_title='Kilometer', firstname='Sylvie', lastname='Cruz')
 # Row(artist_name='Lonnie Gordon', song_title='Catch You Baby (Steve Pitron & Max Sanna Radio Edit)', firstname='Sylvie', lastname='Cruz')
 
-# Now, let's answer the last question, question3: 
+# Now, let's answer the last question, question3: Give me every user name (first and last) in my music app history who listened to the song 'All Hands Against His Own'
 
 file = 'event_datafile_new.csv'
 
@@ -141,7 +158,7 @@ with open(file, encoding = 'utf8') as f:
     next(csvreader) # skip header
     for line in csvreader:
        query3table = """
-CREATE TABLE IF NOT EXISTS query3table (
+CREATE TABLE IF NOT EXISTS song_library (
     user_id int,
     song_title text,
     FirstName text,
@@ -157,7 +174,7 @@ with open(file, encoding='utf8') as f:
     next(csvreader)  # Skip header
     
     query3 = """
-    INSERT INTO query3table (user_id, song_title, FirstName, LastName)
+    INSERT INTO song_library (user_id, song_title, FirstName, LastName)
     VALUES (%s, %s, %s, %s)
     """
     
@@ -166,28 +183,28 @@ with open(file, encoding='utf8') as f:
 
 query3 = """
 SELECT FirstName, LastName 
-FROM query3table 
+FROM song_library 
 WHERE SONG_TITLE = 'All Hands Against His Own'
 """
 result_set3 = session.execute(query3)
 for row in result_set3:
     print(row)
-
+    
 # Results were: Row(firstname='Jacqueline', lastname='Lynch')
 # Row(firstname='Tegan', lastname='Levine')
 # Row(firstname='Sara', lastname='Johnson')
 
 # Now that is all answered, let's drop the tables and finish the connection
 
-querydrop_table = """DROP TABLE query1table
+querydrop_table = """DROP TABLE artist_library
 """
 
 session.execute(querydrop_table)
-querydrop_table = """DROP TABLE query2table
+querydrop_table = """DROP TABLE user_historic
 """
 
 session.execute(querydrop_table)
-querydrop_table = """DROP TABLE query3table
+querydrop_table = """DROP TABLE song_library
 """
 
 session.execute(querydrop_table)
